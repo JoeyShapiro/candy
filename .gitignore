@@ -1,2 +1,4 @@
 .pio
 target
+.DS_Store
+logs
