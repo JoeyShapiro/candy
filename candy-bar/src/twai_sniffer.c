@@ -9,12 +9,10 @@
  *   SN65HVD230 GND -> XIAO GND and OBD-II pin 5 (signal ground)
  *
  * Runs the controller in listen-only mode: it never transmits, not even
- * ACK bits or error frames, so it can't disturb the car's bus. Every
- * frame on the bus is printed as raw hex:
- *
- *     12.345678 RX 17C  8  00 00 02 F1 00 00 00 11
- *
- * Decode the log afterwards with little-win.py and honda.dbc.
+ * ACK bits or error frames, so it can't disturb the car's bus. Frames
+ * are buffered in RAM and written to stdout once a second as a binary
+ * dump: a "CNDY" + uint32 count header followed by 16-byte capture_t
+ * entries (little-endian).
  */
 
 #include <stdio.h>
@@ -25,11 +23,13 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_err.h"
+#include "driver/usb_serial_jtag_vfs.h"
 
 #define TWAI_TX_GPIO GPIO_NUM_4
 #define TWAI_RX_GPIO GPIO_NUM_5
 
 #define STATUS_PERIOD_MS 5000
+#define DUMP_PERIOD_MS 1000
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -73,6 +73,24 @@ static void capture(const twai_message_t *msg)
     memcpy(c->data, msg->data, sizeof(c->data));
 }
 
+/* Each dump is this header followed by `count` raw capture_t entries.
+ * Text "# ..." lines can appear between dumps; a reader scans for the
+ * magic to find the next one. */
+typedef struct {
+    char magic[4];
+    // TODO add base timestamp that all t_us values are relative to, so a reader can reconstruct the full 64-bit timestamp.
+    uint32_t count;
+} dump_header_t;
+
+static void dump_capture(void)
+{
+    dump_header_t hdr = { .magic = { 'C', 'N', 'D', 'Y' }, .count = s_capture_len };
+    fwrite(&hdr, sizeof(hdr), 1, stdout);
+    fwrite(s_capture, sizeof(capture_t), s_capture_len, stdout);
+    fflush(stdout);
+    s_capture_len = 0;
+}
+
 static void print_status(void)
 {
     static const char *state_names[] = { "STOPPED", "RUNNING", "BUS_OFF", "RECOVERING" };
@@ -97,6 +115,9 @@ void app_main(void)
      * first lines aren't lost. */
     vTaskDelay(pdMS_TO_TICKS(2000));
 
+    /* stdout carries binary dumps, so stop newlib turning 0x0A into 0D 0A. */
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
+
     twai_general_config_t g_config =
         TWAI_GENERAL_CONFIG_DEFAULT(TWAI_TX_GPIO, TWAI_RX_GPIO, TWAI_MODE_LISTEN_ONLY);
     /* The default 5-frame queue overflows within milliseconds on a busy bus. */
@@ -119,10 +140,15 @@ void app_main(void)
     printf("# listen-only sniffer at 500kbps, RX=GPIO%d\n", TWAI_RX_GPIO);
 
     int64_t last_status_us = esp_timer_get_time();
+    int64_t last_dump_us = last_status_us;
     while (1) {
         twai_message_t msg;
-        if (twai_receive(&msg, pdMS_TO_TICKS(STATUS_PERIOD_MS)) == ESP_OK) {
+        if (twai_receive(&msg, pdMS_TO_TICKS(DUMP_PERIOD_MS)) == ESP_OK) {
             capture(&msg);
+        }
+        if (esp_timer_get_time() - last_dump_us >= DUMP_PERIOD_MS * 1000LL) {
+            last_dump_us = esp_timer_get_time();
+            dump_capture();
         }
         if (esp_timer_get_time() - last_status_us >= STATUS_PERIOD_MS * 1000LL) {
             last_status_us = esp_timer_get_time();
