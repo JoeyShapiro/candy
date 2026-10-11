@@ -18,6 +18,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/twai.h"
@@ -32,18 +33,44 @@
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
-static double now_s(void)
-{
-    return esp_timer_get_time() / 1e6;
-}
+/* The C3 has no PSRAM and ~400 KB of SRAM total, so this lives in .bss
+ * where an oversized buffer fails at link time rather than at runtime. */
+#define CAPTURE_BUF_BYTES (128 * 1024)
 
-static void print_raw(const twai_message_t *msg)
+/* 16 bytes per frame. t_us wraps every ~71 minutes; id only holds
+ * standard 11-bit IDs, so extended frames are rejected in capture(). */
+typedef struct {
+    uint32_t t_us;
+    uint16_t id;
+    uint8_t dlc;
+    uint8_t data[8];
+} capture_t;
+
+_Static_assert(sizeof(capture_t) == 16, "capture_t should pack to 16 bytes");
+
+static capture_t s_capture[CAPTURE_BUF_BYTES / sizeof(capture_t)];
+static size_t s_capture_len;
+static uint32_t s_extd_dropped;
+
+static void capture(const twai_message_t *msg)
 {
-    printf("%12.6f RX %03lX  %d ", now_s(), (unsigned long)msg->identifier, msg->data_length_code);
-    for (int i = 0; i < msg->data_length_code && i < 8; i++) {
-        printf(" %02X", msg->data[i]);
+    if (msg->extd || msg->identifier > 0x7FF) {
+        /* Only report the first one; the count goes in the status line so
+         * a bus full of extended frames can't flood the console. */
+        if (s_extd_dropped++ == 0) {
+            printf("# error: 29-bit ID %08lX doesn't fit in capture_t, dropping extended frames\n",
+                   (unsigned long)msg->identifier);
+        }
+        return;
     }
-    printf("\n");
+    if (s_capture_len >= ARRAY_LEN(s_capture)) {
+        return;
+    }
+    capture_t *c = &s_capture[s_capture_len++];
+    c->t_us = (uint32_t)esp_timer_get_time();
+    c->id = (uint16_t)msg->identifier;
+    c->dlc = msg->data_length_code;
+    memcpy(c->data, msg->data, sizeof(c->data));
 }
 
 static void print_status(void)
@@ -55,11 +82,13 @@ static void print_status(void)
         printf("# status: twai_get_status_info failed: %s\n", esp_err_to_name(err));
         return;
     }
-    printf("# status: state=%s rx_err=%lu rx_queued=%lu bus_err=%lu rx_missed=%lu rx_overrun=%lu\n",
+    printf("# status: state=%s rx_err=%lu rx_queued=%lu bus_err=%lu rx_missed=%lu rx_overrun=%lu captured=%u/%u extd_dropped=%lu\n",
            status.state < ARRAY_LEN(state_names) ? state_names[status.state] : "?",
            (unsigned long)status.rx_error_counter, (unsigned long)status.msgs_to_rx,
            (unsigned long)status.bus_error_count, (unsigned long)status.rx_missed_count,
-           (unsigned long)status.rx_overrun_count);
+           (unsigned long)status.rx_overrun_count,
+           (unsigned)s_capture_len, (unsigned)ARRAY_LEN(s_capture),
+           (unsigned long)s_extd_dropped);
 }
 
 void app_main(void)
@@ -93,7 +122,7 @@ void app_main(void)
     while (1) {
         twai_message_t msg;
         if (twai_receive(&msg, pdMS_TO_TICKS(STATUS_PERIOD_MS)) == ESP_OK) {
-            print_raw(&msg);
+            capture(&msg);
         }
         if (esp_timer_get_time() - last_status_us >= STATUS_PERIOD_MS * 1000LL) {
             last_status_us = esp_timer_get_time();
