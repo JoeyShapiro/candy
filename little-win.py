@@ -1,4 +1,4 @@
-logf = open('candy-bar/logs/device-monitor-261010-154851.log')
+logf = open('candy-bar/logs/device-monitor-261010-164259.log')
 dbcf = open('honda.dbc')
 
 # https://github.com/commaai/opendbc/tree/master/opendbc/dbc
@@ -18,14 +18,13 @@ for line in dbcf.readlines():
 
 
 for line in logf.readlines():
-    if not line.startswith('    '):
-        continue
-
     # split the line into fields
+    # (don't key off leading spaces: the timestamp is right-aligned, so
+    # there are 4 before 10s, 3 before 100s, 2 after)
     fields = line.split()
 
     # skip lines where fields[1] is not RX/TX
-    if fields[1] not in ['RX', 'TX']:
+    if len(fields) < 4 or fields[1] not in ['RX', 'TX']:
         continue
 
     # convert hex id to int
