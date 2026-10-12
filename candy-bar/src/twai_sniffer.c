@@ -137,7 +137,6 @@ void app_main(void)
         printf("# twai_start failed: %s\n", esp_err_to_name(err));
         return;
     }
-    printf("# listen-only sniffer at 500kbps, RX=GPIO%d\n", TWAI_RX_GPIO);
 
     int64_t last_status_us = esp_timer_get_time();
     int64_t last_dump_us = last_status_us;
@@ -152,7 +151,7 @@ void app_main(void)
         }
         if (esp_timer_get_time() - last_status_us >= STATUS_PERIOD_MS * 1000LL) {
             last_status_us = esp_timer_get_time();
-            print_status();
+            // print_status();
         }
     }
 }
