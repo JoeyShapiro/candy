@@ -42,8 +42,10 @@ impl Render for HelloWorld {
 }
  
 // Must match dump_header_t / capture_t in candy-bar/src/twai_sniffer.c.
+const MAGIC: &[u8; 4] = b"CNDY";
 const HEADER_LEN: usize = 8;
 const CAPTURE_LEN: usize = 16;
+const MAX_CAPTURES: usize = 128 * 1024 / CAPTURE_LEN;
 
 /// Pulls complete dumps out of `pending` and appends their captures to `out`.
 /// The stream is back-to-back dumps: an 8-byte header ("CNDY" + u32 count)
@@ -54,6 +56,12 @@ fn drain_dumps(pending: &mut Vec<u8>, out: &mut File) {
             return;
         }
         let count = u32::from_le_bytes(pending[4..8].try_into().unwrap()) as usize;
+        // The port can hand over leftover bytes from before it was opened,
+        // so the stream may not start on a header. Slide until it does.
+        if &pending[..4] != MAGIC || count > MAX_CAPTURES {
+            pending.remove(0);
+            continue;
+        }
         let end = HEADER_LEN + count * CAPTURE_LEN;
         if pending.len() < end {
             return;
