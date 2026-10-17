@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 gpui = { version = "*" }
-serialport = "4.10.1"
+nusb = "0.2.8"

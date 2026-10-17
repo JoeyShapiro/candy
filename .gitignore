@@ -2,3 +2,4 @@
 target
 .DS_Store
 logs
+managed_components

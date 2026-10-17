@@ -1,4 +1,10 @@
-# The S3 defaults to UART0 for the console; route stdout over the
-# built-in USB Serial/JTAG port like the C3 did.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# The OTG peripheral takes over the S3's USB PHY for the vendor-class
+# interface, which disconnects the USB Serial/JTAG port, so the console
+# (errors only) stays on UART0: TX on GPIO43 (D6).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# One vendor-specific interface carrying the capture dumps. A larger TX
+# FIFO lets a dump drain in fewer, bigger chunks.
+CONFIG_TINYUSB_VENDOR_COUNT=1
+CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=4096

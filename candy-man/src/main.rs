@@ -1,10 +1,14 @@
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::time::Duration;
 
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString, Window,
     WindowBounds, WindowOptions,
+};
+use nusb::{
+    transfer::{Bulk, In},
+    MaybeFuture,
 };
  
 struct HelloWorld {
@@ -41,6 +45,12 @@ impl Render for HelloWorld {
     }
 }
  
+// Must match USB_VID / USB_PID / USB_EP_IN in candy-bar/src/twai_sniffer.c.
+const USB_VID: u16 = 0x1209;
+const USB_PID: u16 = 0x0001;
+const USB_INTERFACE: u8 = 0;
+const USB_EP_IN: u8 = 0x81;
+
 // Must match dump_header_t / capture_t in candy-bar/src/twai_sniffer.c.
 const MAGIC: &[u8; 4] = b"CNDY";
 const HEADER_LEN: usize = 8;
@@ -56,7 +66,7 @@ fn drain_dumps(pending: &mut Vec<u8>, out: &mut File) {
             return;
         }
         let count = u32::from_le_bytes(pending[4..8].try_into().unwrap()) as usize;
-        // The port can hand over leftover bytes from before it was opened,
+        // The device can hand over leftover bytes from before it was opened,
         // so the stream may not start on a header. Slide until it does.
         if &pending[..4] != MAGIC || count > MAX_CAPTURES {
             pending.remove(0);
@@ -72,13 +82,24 @@ fn drain_dumps(pending: &mut Vec<u8>, out: &mut File) {
 }
 
 fn main() {
-    for p in serialport::available_ports().unwrap() {
-        println!("{}", p.port_name); // on macOS: /dev/cu.usbserial-XXXX or /dev/cu.usbmodemXXXX
-    }
-
-    let mut port = serialport::new("/dev/cu.usbmodem101", 115_200)
-        .timeout(Duration::from_millis(500))
-        .open().unwrap();
+    let dev_info = nusb::list_devices()
+        .wait()
+        .unwrap()
+        .find(|d| d.vendor_id() == USB_VID && d.product_id() == USB_PID)
+        .expect("candy-bar not found; is it plugged in?");
+    println!(
+        "found {} at bus {} address {}",
+        dev_info.product_string().unwrap_or("candy-bar"),
+        dev_info.bus_id(),
+        dev_info.device_address(),
+    );
+    let device = dev_info.open().wait().unwrap();
+    let interface = device.claim_interface(USB_INTERFACE).wait().unwrap();
+    let mut reader = interface
+        .endpoint::<Bulk, In>(USB_EP_IN)
+        .unwrap()
+        .reader(4096)
+        .with_read_timeout(Duration::from_millis(500));
 
     let mut out = OpenOptions::new()
         .create(true)
@@ -88,12 +109,12 @@ fn main() {
     let mut pending = Vec::new();
     loop {
         let mut buf = [0u8; 1024];
-        let n = match port.read(&mut buf) {
+        let n = match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
             // The sniffer only sends once a second, so quiet gaps are normal.
             Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
-            Err(e) => panic!("serial read failed: {e}"),
+            Err(e) => panic!("USB read failed: {e}"),
         };
         pending.extend_from_slice(&buf[..n]);
         drain_dumps(&mut pending, &mut out);
