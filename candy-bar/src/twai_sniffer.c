@@ -1,10 +1,10 @@
 /*
  * twai_sniffer.c
  *
- * Passive CAN sniffer for the XIAO ESP32-C3 + SN65HVD230 transceiver:
+ * Passive CAN sniffer for the XIAO ESP32-S3 + SN65HVD230 transceiver:
  *
- *   SN65HVD230 CTX -> GPIO4 (D2)
- *   SN65HVD230 CRX -> GPIO5 (D3)
+ *   SN65HVD230 CTX -> GPIO4 (D3)
+ *   SN65HVD230 CRX -> GPIO5 (D4)
  *   SN65HVD230 CANH/CANL -> OBD-II pins 6/14
  *   SN65HVD230 GND -> XIAO GND and OBD-II pin 5 (signal ground)
  *
@@ -33,8 +33,8 @@
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
-/* The C3 has no PSRAM and ~400 KB of SRAM total, so this lives in .bss
- * where an oversized buffer fails at link time rather than at runtime. */
+/* Kept in internal SRAM (.bss) rather than PSRAM, which isn't enabled,
+ * so an oversized buffer fails at link time rather than at runtime. */
 #define CAPTURE_BUF_BYTES (128 * 1024)
 
 /* 16 bytes per frame. t_us wraps every ~71 minutes; id only holds

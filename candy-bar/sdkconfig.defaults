@@ -1,0 +1,4 @@
+# The S3 defaults to UART0 for the console; route stdout over the
+# built-in USB Serial/JTAG port like the C3 did.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
